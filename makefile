@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-Wall -lboost_system
+CXXFLAGS=-Wall -lboost_system --std=c++11
 
 all: klient serwer
 
