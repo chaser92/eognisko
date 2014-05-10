@@ -1,3 +1,6 @@
+#ifndef SERWER_H
+#define SERWER_H
+
 #include <iostream>
 #include <queue>
 #include <vector>
@@ -43,38 +46,48 @@ void acknowledge();
 void onSigint(const e_code&, int);
 void udpReceiveNext(int clientId);
 void onUdpReceived(const e_code&, std::size_t, int);
-void evalDataUdpCommand(stringstream&, int);
-void evalClientUdpCommand(stringstream&, int);
+void evalClientUdpCommand(stringstream&, int, size_t);
+void evalUploadUdpCommand(stringstream&, int, size_t);
+void evalRetransmitUdpCommand(stringstream&, int, size_t);
+void evalAckUdpCommand(stringstream&, int, size_t);
+void evalKeepaliveUdpCommand(stringstream&, int, size_t);
 void transmitData(const e_code&);
+size_t mix();
 
-boost::asio::io_service ioservice;
-boost::asio::ip::tcp::acceptor acceptor(ioservice);
-boost::asio::deadline_timer periodicSender(ioservice, boost::posix_time::seconds(1));
-boost::asio::deadline_timer transmitter(ioservice, boost::posix_time::milliseconds(5));
-boost::asio::signal_set signals(ioservice, SIGINT, SIGTERM);
-boost::asio::ip::tcp::endpoint endpoint;
-boost::asio::ip::udp::endpoint endpoint_udp;
-boost::asio::ip::udp::socket sock_dgram(ioservice);
+extern boost::asio::io_service ioservice;
+extern boost::asio::ip::tcp::acceptor acceptor;
+extern boost::asio::deadline_timer periodicSender;
+extern boost::asio::deadline_timer transmitter;
+extern boost::asio::signal_set signals;
+extern boost::asio::ip::tcp::endpoint endpoint;
+extern boost::asio::ip::udp::endpoint endpoint_udp;
+extern boost::asio::ip::udp::socket sock_dgram;
 
 struct Client {
   Client();
   QueueState queueState;
-  std::queue<int> queue;
+  vector<int16_t> queue;
   boost::asio::ip::tcp::socket* socket;
   boost::asio::ip::udp::endpoint udpEndpoint;
   bool udpRegistered;
+  int lastPacket;
+  string buf_dgram;
 };
 
-std::vector<Client> clients;
-char udpBuffer[10000];
-Client toAccept;
+extern std::vector<Client> clients;
+extern char udpBuffer[10000];
+extern Client toAccept;
+extern string state;
+extern int16_t output_buf[20000]; 
+extern int lastUpload;
+extern int lastData;
+extern int lastClient;
+extern int PORT;// numer portu, z którego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
+extern int FIFO_SIZE; // rozmiar w bajtach kolejki FIFO, którą serwer utrzymuje dla każdego z klientów; ustawiany parametrem -F serwera, domyślnie 10560
+extern int FIFO_LOW_WATERMARK;// opis w treści; ustawiany parametrem -L serwera, domyślnie 0
+extern int FIFO_HIGH_WATERMARK;// opis w treści; ustawiany parametrem -H serwera, domyślnie równy FIFO_SIZE
+extern int BUF_LEN; // rozmiar (w datagramach) bufora pakietów wychodzących, ustawiany parametrem -X serwera, domyślnie 10 
+extern int RETRANSMIT_LIMIT; // opis w treści; ustawiany parametrem -X klienta, domyślnie 10
+extern int TX_INTERVAL; // czas (w milisekundach) pomiędzy kolejnymi wywołaniami miksera, ustawiany parametrem -i serwera; domyślnie: 5ms
 
-int lastUpload = 0;
-int lastClient = 0;
-int PORT = 14582;// numer portu, z którego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
-int FIFO_SIZE = 10560; // rozmiar w bajtach kolejki FIFO, którą serwer utrzymuje dla każdego z klientów; ustawiany parametrem -F serwera, domyślnie 10560
-int FIFO_LOW_WATERMARK = 0;// opis w treści; ustawiany parametrem -L serwera, domyślnie 0
-int FIFO_HIGH_WATERMARK = FIFO_SIZE;// opis w treści; ustawiany parametrem -H serwera, domyślnie równy FIFO_SIZE
-int BUF_LEN = 10; // rozmiar (w datagramach) bufora pakietów wychodzących, ustawiany parametrem -X serwera, domyślnie 10 
-int RETRANSMIT_LIMIT = 10; // opis w treści; ustawiany parametrem -X klienta, domyślnie 10
-int TX_INTERVAL = 5; // czas (w milisekundach) pomiędzy kolejnymi wywołaniami miksera, ustawiany parametrem -i serwera; domyślnie: 5ms
+#endif
