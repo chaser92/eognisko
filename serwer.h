@@ -12,8 +12,8 @@
 #include <boost/asio/ip/tcp.hpp>
 
 
-typedef boost::system::error_code e_code;
 using namespace std;
+typedef boost::system::error_code e_code;
 
 enum QueueState {
   FILLING,
@@ -51,7 +51,9 @@ void evalUploadUdpCommand(stringstream&, int, size_t);
 void evalRetransmitUdpCommand(stringstream&, int, size_t);
 void evalAckUdpCommand(stringstream&, int, size_t);
 void evalKeepaliveUdpCommand(stringstream&, int, size_t);
+void evalRetransmitUdpCommand(stringstream&, int, size_t);
 void transmitData(const e_code&);
+void updateMinMaxFifo(int);
 size_t mix();
 
 extern boost::asio::io_service ioservice;
@@ -71,11 +73,13 @@ struct Client {
   boost::asio::ip::udp::endpoint udpEndpoint;
   bool udpRegistered;
   int lastPacket;
+  int minFifoSecond;
+  int maxFifoSecond;
   string buf_dgram;
 };
 
 extern std::vector<Client> clients;
-extern char udpBuffer[10000];
+extern char udpBuffer[];
 extern Client toAccept;
 extern string state;
 extern int16_t output_buf[20000]; 

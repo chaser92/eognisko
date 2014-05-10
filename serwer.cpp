@@ -11,6 +11,7 @@ boost::asio::ip::tcp::endpoint endpoint;
 boost::asio::ip::udp::endpoint endpoint_udp;
 boost::asio::ip::udp::socket sock_dgram(ioservice);
 string state;
+string currentSentData;
 std::vector<Client> clients;
 char udpBuffer[10000];
 Client toAccept;
@@ -30,7 +31,9 @@ int TX_INTERVAL = 5;
 Client::Client()
     :queueState(UNINITIALIZED),
     udpRegistered(false),
-    lastPacket(0) { }
+    lastPacket(0),
+    minFifoSecond(0),
+    maxFifoSecond(0) { }
 
 int main(int argc, char** argv) {
     start(PORT);
@@ -98,7 +101,6 @@ void onSigint(
 
 void onUdpReceived(const e_code&, size_t bytes_transferred, 
 		int clientId) {
-	std::cout << "UDP recv'd" << bytes_transferred << std::endl;
 	stringstream stream(udpBuffer);
 	string command;
 	stream >> command;
@@ -108,6 +110,8 @@ void onUdpReceived(const e_code&, size_t bytes_transferred,
 		evalUploadUdpCommand(stream, clientId, bytes_transferred);
 	else if (command == "KEEPALIVE")
 		evalKeepaliveUdpCommand(stream, clientId, bytes_transferred);
+	else if (command == "RETRANSMIT")
+		evalRetransmitUdpCommand(stream, clientId, bytes_transferred);
 	else
 		cerr << "Unsupported datagram command: " << command << endl;
 	udpReceiveNext(clientId);
@@ -116,12 +120,9 @@ void onUdpReceived(const e_code&, size_t bytes_transferred,
 void evalClientUdpCommand(stringstream& stream, int clientId, size_t) {
 	int assumedClientId;
 	stream >> assumedClientId;
-	if (assumedClientId == clientId) {
-		clients[clientId].udpRegistered = true;
-		cerr << "Client registered: " << clientId << endl;
-	}
-	else
-		cerr << "Client is not the one he claims he is!" << endl;
+	clients[assumedClientId].udpRegistered = true;
+	cerr << "Client registered: " << assumedClientId << endl;
+
 }
 
 void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
@@ -139,13 +140,14 @@ void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 			cerr << "Client " << clientId << " has its queue filled!" << endl;
 			return;
 		}
-		int32_t v = 0;
-		v += stream.get();
-		v *= 256;
-		v += stream.get();
+		int16_t v = 0;
+		char c1 = stream.get();
+		char c2 = stream.get();
+		v = c1 + c2 * 256;
 		clients[clientId].queue.push_back(v);
 		cerr << clientId << " Pushin' " << v << endl;
 	}
+	updateMinMaxFifo(clientId);
 	stringstream response;
 	response << "ACK " << packetId << '\n';
 	sock_dgram.async_send_to(
@@ -157,6 +159,10 @@ void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 }
 
 void evalKeepaliveUdpCommand(stringstream& stream, int clientId, size_t bytes) {
+
+}
+
+void evalRetransmitUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 
 }
 
@@ -175,7 +181,8 @@ void sendPeriodicState(const e_code&) {
 		try {
 			std::string addr = boost::lexical_cast<std::string>(client.socket->remote_endpoint());
 			strstate << addr << " FIFO: " << client.queue.size() << "/" << FIFO_SIZE << 
-				" (min. 824, max. 7040)\n";
+				" (min. " << client.minFifoSecond << ", max. " << client.maxFifoSecond << ")\n";
+			client.minFifoSecond = client.maxFifoSecond = client.queue.size();
 		} catch (boost::system::system_error err) {
 			client.queueState = ERROR;
 		}
@@ -206,13 +213,23 @@ size_t mix() {
 	mixer(&inputs[0], inputs.size(), output_buf, &output_size, TX_INTERVAL);
 	for (int i=0; i<clients.size(); i++) {
 		clients[i].queue.erase(clients[i].queue.begin(), clients[i].queue.begin() + min(clients[i].queue.size(), inputs[i].consumed));
+		updateMinMaxFifo(i);
 	}
 	return output_size;
 }
 
+void updateMinMaxFifo(int clientId) {
+	int sz = clients[clientId].queue.size();
+	if (clients[clientId].minFifoSecond == 0)
+		clients[clientId].minFifoSecond = sz;
+	else
+		clients[clientId].minFifoSecond = min(clients[clientId].minFifoSecond, sz);
+	clients[clientId].maxFifoSecond = max(clients[clientId].maxFifoSecond, sz);
+}
+
 void transmitData(const e_code&) {
 	size_t size = mix();
-	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(5));
+	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(TX_INTERVAL));
 	transmitter.async_wait(&transmitData);
 
 	for (auto client: clients) {
@@ -231,9 +248,5 @@ void transmitData(const e_code&) {
 			});
 	}
 	lastData++;
-
-}
-
-void onTcpWriteCompleted() {
 
 }

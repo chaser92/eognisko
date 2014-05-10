@@ -8,7 +8,7 @@ void mixer(struct mixer_input* inputs,
   void* output_buf,
   size_t* output_size,
   unsigned long tx_interval_ms) 
-{
+  {
 	int pos = 0;
 	bool anyoneWritten = true;
 	while (anyoneWritten) {
@@ -25,6 +25,6 @@ void mixer(struct mixer_input* inputs,
 		((int16_t*)output_buf)[pos] = val;
 		pos++;
 	}
-	*output_size = pos;
+	*output_size = pos-1;
 
 }
