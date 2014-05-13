@@ -45,6 +45,7 @@ bool handleError(const e_code& error, string caller) {
 }
 
 void start() {
+	std::cout.rdbuf()->pubsetbuf( NULL, 0 ); 
 	endpoint.address(boost::asio::ip::address_v4::from_string("127.0.0.1"));
 	endpoint.port(PORT);
 	endpoint_udp = boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 15555);
@@ -92,15 +93,20 @@ void readNextReportLine() {
 		});
 }
 
-char inbuf[1];
+int read_from_stdin_total = 0;
+char inbuf[2048];
 void readNextStdinLine() {
+
 	if (connectionOk)
-  	boost::asio::async_read(input_, boost::asio::buffer(inbuf, 1),
+  	boost::asio::async_read(input_, boost::asio::buffer(inbuf, 2048),
     	[&] (const e_code& error, size_t bytes_received) {
+    		read_from_stdin_total += bytes_received;
 			if (handleError(error, "readNextStdinLine"))
 				return;
-			dataToSend.push_back(inbuf[0]);
+			for (size_t i=0; i<bytes_received; i++)
+				dataToSend.push_back(inbuf[i]);
     		readNextStdinLine();
+    		cerr << "Odczytano z wejscia  " << read_from_stdin_total <<endl;
     	});
 }
 
@@ -122,6 +128,8 @@ void handshakeUdp(int clientId) {
 		});
 }
 
+int totalTransferred = 0;
+
 void transmitNextPack(const e_code& error) {
 	if (handleError(error, "transmitNextPack (timer)"))
 		return;	
@@ -131,10 +139,10 @@ void transmitNextPack(const e_code& error) {
 	data << "UPLOAD " << packId << "\n";
 	if (window == 0)
 		cerr << "Warning: window empty!" << endl;
-	int dataSent = min(dataToSend.size(), window);
-	data.write(&(*dataToSend.begin()), min(UDP_MAX_SIZE, min(dataToSend.size(), window)));
+	int dataSent = min(UDP_MAX_SIZE, min(dataToSend.size(), window));
+	data.write(&(*dataToSend.begin()), dataSent);
+	totalTransferred += dataSent;
 	currentSentData = data.str();
-	dataToSend.erase(dataToSend.begin(), dataToSend.begin() + dataSent);
 	sock_dgram.async_send_to(
 		boost::asio::buffer(currentSentData, currentSentData.length()),
 		endpoint_udp_server,
@@ -142,12 +150,15 @@ void transmitNextPack(const e_code& error) {
 			if (handleError(error, "transmitNextPack"))
 				return; 	
 		});
+	dataToSend.erase(dataToSend.begin(), dataToSend.begin() + dataSent);
+	cerr << dataSent << " " << totalTransferred << endl;
 }
 
 
 void handleAck(int ackId) {
+	cerr << "ACK'd " << ackId << endl;
 	packId++;
-	nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(1));
+	nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(5));
 	nextpackTimer.async_wait(&transmitNextPack);
 }
 

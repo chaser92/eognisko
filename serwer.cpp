@@ -166,15 +166,17 @@ void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 		if (clients[clientId].queue.size() == FIFO_SIZE) 
 		{
 			cerr << "Client " << clientId << " has its queue filled!" << endl;
-			return;
 		}
-		int16_t v = 0;
-		char c1 = stream.get();
-		char c2 = stream.get();
-		v = c1 + c2 * 256;
-		clients[clientId].queue.push_back(v);
+		else {
+			int16_t v = 0;
+			char c1 = stream.get();
+			char c2 = stream.get();
+			v = c1 + c2 * 256;
+			clients[clientId].queue.push_back(v);
+		}
 	}
 	updateMinMaxFifo(clientId);
+	cerr << "FIFOSIZE" << clientId << " " << clients[clientId].queue.size() << " " << bytes << endl;
 	stringstream response;
 	response << "ACK " << packetId << '\n';
 	shared_ptr<string> responseStr(new string(response.str()));
@@ -196,7 +198,7 @@ void evalRetransmitUdpCommand(stringstream& stream, int clientId, size_t bytes) 
 
 void udpReceiveNext() {
 	sock_dgram.async_receive_from(
-		boost::asio::buffer(udpBuffer, 512),
+		boost::asio::buffer(udpBuffer, 10000),
 		udp_received_endpoint,
 		[] (const e_code& error,
 			size_t bytes_transferred) {
@@ -265,7 +267,7 @@ size_t mix() {
 	size_t output_size;
 	mixer(&inputs[0], inputs.size(), output_buf, &output_size, TX_INTERVAL);
 	for (int i=0; i<clients.size(); i++) {
-		clients[i].queue.erase(clients[i].queue.begin(), clients[i].queue.begin() + min(clients[i].queue.size(), inputs[i].consumed));
+		clients[i].queue.erase(clients[i].queue.begin(), clients[i].queue.begin() + min(clients[i].queue.size(), inputs[i].consumed/2));
 		updateMinMaxFifo(i);
 	}
 	return output_size;
@@ -304,7 +306,7 @@ void transmitData(const e_code&) {
 			continue;
 		stringstream header;
 		header << "DATA " << lastData << " " << client.lastPacket << " " << 
-			(FIFO_SIZE - client.queue.size()) << '\n';
+			(FIFO_SIZE - client.queue.size() * 2) << '\n';
 		string ob = string((char*)output_buf);
 		header.write((char*)output_buf, size);
 		shared_ptr<string> toSend(new string(header.str()));

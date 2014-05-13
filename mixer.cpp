@@ -11,7 +11,7 @@ void mixer(struct mixer_input* inputs,
   size_t* output_size,
   unsigned long tx_interval_ms) 
   {
-	unsigned long len = tx_interval_ms * TX_LEN;
+	unsigned long len = tx_interval_ms * TX_LEN / 2;
 	int pos = 0;
 	while (pos < len) {
 		int16_t val = 0;
@@ -19,10 +19,10 @@ void mixer(struct mixer_input* inputs,
 			if (pos >= inputs[i].len)
 				continue;
 			val = min((((int16_t*)inputs[i].data)[pos]) + val, INT16_MAX);
-			inputs[i].consumed++;
+			inputs[i].consumed += 2;
 		}
 		((int16_t*)output_buf)[pos] = val;
 		pos++;
 	}
-	*output_size = pos * sizeof(int16_t);
+	*output_size = tx_interval_ms * TX_LEN;
 }
