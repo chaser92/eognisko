@@ -48,6 +48,7 @@ struct Client {
   int minFifoSecond;
   int maxFifoSecond;
   string buf_dgram;
+  bool ticket;
 };
 
 extern map<boost::asio::ip::udp::endpoint, int> clientMap;

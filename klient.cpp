@@ -1,7 +1,5 @@
 #include "klient.h"
 
-int16_t output_buf[100000]; 
-int lastUpload = 0;
 int lastData = 0;
 int lastClient = 0;
 int PORT = 14582;// numer portu, z ktorego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
@@ -12,7 +10,7 @@ int packId = 0;
 unsigned long window = 0;
 int lastReceivedData = 0;
 char udpBuffer[1000001];
-unsigned long UDP_MAX_SIZE = 2048;
+unsigned long UDP_MAX_SIZE = 512;
 boost::asio::io_service ioservice;
 boost::asio::ip::tcp::endpoint endpoint;
 boost::asio::ip::udp::endpoint endpoint_udp;
@@ -23,10 +21,12 @@ boost::asio::streambuf tcpbuffer;
 boost::asio::streambuf stdinbuffer;
 boost::asio::streambuf udpbuffer;
 boost::asio::posix::stream_descriptor input_(ioservice);
+boost::asio::posix::stream_descriptor output_(ioservice);
 string currentSentData;
 vector<char> dataToSend;
 boost::asio::deadline_timer keepaliveTimer(ioservice, boost::posix_time::milliseconds(10));
 boost::asio::deadline_timer nextpackTimer(ioservice, boost::posix_time::milliseconds(5));
+boost::asio::deadline_timer nextStdinTimer(ioservice, boost::posix_time::milliseconds(3));
 string keepaliveText = "KEEPALIVE\n";
 bool connectionOk = false;
 
@@ -45,7 +45,7 @@ bool handleError(const e_code& error, string caller) {
 }
 
 void start() {
-	std::cout.rdbuf()->pubsetbuf( NULL, 0 ); 
+	ios::sync_with_stdio(false);
 	endpoint.address(boost::asio::ip::address_v4::from_string("127.0.0.1"));
 	endpoint.port(PORT);
 	endpoint_udp = boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 15555);
@@ -65,12 +65,13 @@ void start() {
 			string cmd;
 			int clientId; 
 			data >> cmd >> clientId;
-			cerr << cmd << " " << clientId << endl;
+			//4cerr << cmd << " " << clientId << endl;
 			if (cmd != "CLIENT") {
 				cerr << "Error! Unknown Server Type!" << endl;
 			}
 			connectionOk = true;
 			input_.assign( STDIN_FILENO );
+			output_.assign( STDOUT_FILENO );
 			readNextReportLine();
 			readNextStdinLine();
 			cerr << "Registered as client " << clientId << endl;
@@ -95,19 +96,20 @@ void readNextReportLine() {
 
 int read_from_stdin_total = 0;
 char inbuf[2048];
-void readNextStdinLine() {
-
-	if (connectionOk)
+void readNextStdinLine(const e_code&) {
+	if (connectionOk) {
   	boost::asio::async_read(input_, boost::asio::buffer(inbuf, 2048),
     	[&] (const e_code& error, size_t bytes_received) {
     		read_from_stdin_total += bytes_received;
-			if (handleError(error, "readNextStdinLine"))
+			if (error)
 				return;
-			for (size_t i=0; i<bytes_received; i++)
+			for (size_t i=0; i<bytes_received; i++) {
 				dataToSend.push_back(inbuf[i]);
-    		readNextStdinLine();
-    		cerr << "Odczytano z wejscia  " << read_from_stdin_total <<endl;
+			}
+			readNextStdinLine();
+    		cerr << "Odczytano z wejscia  " << read_from_stdin_total << endl;
     	});
+  	}
 }
 
 void abort() {
@@ -140,6 +142,8 @@ void transmitNextPack(const e_code& error) {
 	if (window == 0)
 		cerr << "Warning: window empty!" << endl;
 	int dataSent = min(UDP_MAX_SIZE, min(dataToSend.size(), window));
+	cerr << "WYSYLAM DANE " << packId << endl;
+	cerr << "Okno to " << window << ", a danych wyslemy " << dataSent << endl;
 	data.write(&(*dataToSend.begin()), dataSent);
 	totalTransferred += dataSent;
 	currentSentData = data.str();
@@ -148,30 +152,40 @@ void transmitNextPack(const e_code& error) {
 		endpoint_udp_server,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
 			if (handleError(error, "transmitNextPack"))
-				return; 	
+				return;
 		});
 	dataToSend.erase(dataToSend.begin(), dataToSend.begin() + dataSent);
-	cerr << dataSent << " " << totalTransferred << endl;
 }
 
 
-void handleAck(int ackId) {
-	cerr << "ACK'd " << ackId << endl;
+void handleAck(int ackId, unsigned long win) {
+	cerr << "ACKACKACKACKACKACKACKACAKCAKC"  << endl;
+	window = win;
 	packId++;
-	nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(5));
-	nextpackTimer.async_wait(&transmitNextPack);
+	transmitNextPack(e_code());
 }
 
 void handleData(int id, int ack, int win, stringstream& data, size_t bytes_transferred) {
+	cerr << "DATA " << id << endl;
 	window = win;
 	lastReceivedData = id;
 	//cerr << "Incoming data (" << bytes_transferred << "):";
-	for (int i=data.tellg() + 1LL; i<bytes_transferred; i++) {
-		cout << udpBuffer[i];
-	}
+	fwrite(udpBuffer + (data.tellg() + 1LL), sizeof(char), 
+		bytes_transferred - (data.tellg() + 1LL), stdout);
+	//shared_ptr<string> dataToPrint(new string(udpBuffer + (data.tellg() + 1LL), 
+	//	bytes_transferred - (data.tellg() + 1LL)));
+	//for (int i=0; i<dataToPrint->length(); i++)
+//		cerr << (int)((*dataToPrint)[i]) << " ";
+	/*boost::asio::async_write(output_, 
+		boost::asio::buffer(*dataToPrint, dataToPrint->length()),
+		[&] (const e_code&, size_t bytes_transferred) {
+
+		});*/
+	//cerr << endl;
 }
 
 void readNextDatagram() {
+	cerr << "readNextDatagram" << endl;
 	if (connectionOk)
 	sock_dgram.async_receive_from(
 		boost::asio::buffer(udpBuffer, 1000000),
@@ -187,15 +201,14 @@ void readNextDatagram() {
 				data >> id >> ack >> win;
 				handleData(id, ack, win, data, bytes_transferred);
 			} else if (command == "ACK") {
-				int ackId;
-				data >> ackId;
-//				cerr << "Acknowledged " << ackId << endl;
-				handleAck(ackId);
+				int ackId, win;
+				data >> ackId >> win;
+				handleAck(ackId, win);
 			}
 			else {
 				cerr << "Unsupported command: " << command << endl;
 			}
-			readNextDatagram();
+			readNextDatagram();		
 		});
 }
 

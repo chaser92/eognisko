@@ -35,7 +35,8 @@ Client::Client()
     udpRegistered(false),
     lastPacket(0),
     minFifoSecond(0),
-    maxFifoSecond(0) { }
+    maxFifoSecond(0),
+    ticket(false) { }
 
 int main(int argc, char** argv) {
 	po::options_description desc("Allowed options");
@@ -159,6 +160,7 @@ void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 		cerr << "Client is not registered!";
 		return;
 	}
+	clients[clientId].ticket = true;
 	int packetId;
 	stream >> packetId;
 	stream.get();
@@ -169,21 +171,24 @@ void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
 		}
 		else {
 			int16_t v = 0;
-			char c1 = stream.get();
-			char c2 = stream.get();
+			char c1 = udpBuffer[i];
+			char c2 = udpBuffer[i+1];
+			//cerr << (int)c1 << " " << (int)c2 << endl;
 			v = c1 + c2 * 256;
 			clients[clientId].queue.push_back(v);
 		}
 	}
 	updateMinMaxFifo(clientId);
-	cerr << "FIFOSIZE" << clientId << " " << clients[clientId].queue.size() << " " << bytes << endl;
+	//cerr << "FIFOSIZE" << clientId << " " << clients[clientId].queue.size() << " " << bytes << endl;
 	stringstream response;
-	response << "ACK " << packetId << '\n';
+	response << "ACK " << packetId << " " << (FIFO_SIZE - clients[clientId].queue.size() * 2) << '\n';
 	shared_ptr<string> responseStr(new string(response.str()));
+	cerr << "POTWIERDZAM " << packetId << endl;
 	sock_dgram.async_send_to(
 		boost::asio::buffer(*responseStr, responseStr->length()),
 		clients[clientId].udpEndpoint,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
+			cerr << "POTWIERDZONE." << endl;
 	    	handleError(error, "upload:sendAcknowledgement");		    
 		});
 }
@@ -260,14 +265,15 @@ size_t mix() {
 	for (auto client: clients) {
 		mixer_input in;
 		in.data = (void*)&(*client.queue.begin());
-		in.len = client.queueState == FILLING ? 0 : client.queue.size();
+		//in.len = client.queueState == FILLING ? 0 : client.queue.size() * 2;
+		in.len = client.queue.size() * 2;
 		in.consumed = 0;
 		inputs.push_back(in);
 	}
 	size_t output_size;
 	mixer(&inputs[0], inputs.size(), output_buf, &output_size, TX_INTERVAL);
 	for (int i=0; i<clients.size(); i++) {
-		clients[i].queue.erase(clients[i].queue.begin(), clients[i].queue.begin() + min(clients[i].queue.size(), inputs[i].consumed/2));
+		clients[i].queue.erase(clients[i].queue.begin(), clients[i].queue.begin() + inputs[i].consumed / 2);
 		updateMinMaxFifo(i);
 	}
 	return output_size;
@@ -298,16 +304,14 @@ void setErrorConnectionState(Client& client) {
 
 void transmitData(const e_code&) {
 	size_t size = mix();
-	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(TX_INTERVAL));
-	transmitter.async_wait(&transmitData);
 
 	for (auto client: clients) {
-		if (client.queueState == ERROR || client.queueState == UNINITIALIZED)	
+		if (!client.ticket || client.queueState == ERROR || client.queueState == UNINITIALIZED)	
 			continue;
+		client.ticket = false;
 		stringstream header;
 		header << "DATA " << lastData << " " << client.lastPacket << " " << 
 			(FIFO_SIZE - client.queue.size() * 2) << '\n';
-		string ob = string((char*)output_buf);
 		header.write((char*)output_buf, size);
 		shared_ptr<string> toSend(new string(header.str()));
 		sock_dgram.async_send_to(
@@ -318,7 +322,8 @@ void transmitData(const e_code&) {
 			});
 	}
 	lastData++;
-
+	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(TX_INTERVAL));
+	transmitter.async_wait(&transmitData);
 }
 
 bool handleError(const e_code& error, const string& caller, Client* client) {
