@@ -128,7 +128,7 @@ void onSigint(
 	acceptor.close();
 	sock_dgram.cancel();
 	sock_dgram.close();
-	for (auto client: clients) {
+	for (auto& client: clients) {
 		if (client.socket) {
 			client.socket->cancel();
 			client.socket->close();
@@ -154,15 +154,17 @@ void evalClientUdpCommand(stringstream& stream, boost::asio::ip::udp::endpoint r
 	 " as #" << clientId << endl;
 }
 
-void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) {
+void evalUploadUdpCommand(stringstream& stream, int clientId, size_t bytes) { 
 	if (clientId == -1)
 	{
 		cerr << "Client is not registered!";
 		return;
 	}
+	cerr << "UPLOAD " << bytes << endl;
 	clients[clientId].ticket = true;
 	int packetId;
 	stream >> packetId;
+	clients[clientId].lastPacket = packetId;
 	stream.get();
 	for (int i=stream.tellg(); i<bytes-1; i+=2) {
 		if (clients[clientId].queue.size() == FIFO_SIZE) 
@@ -262,7 +264,7 @@ void sendPeriodicState(const e_code& error) {
 
 size_t mix() {
 	vector<mixer_input> inputs;
-	for (auto client: clients) {
+	for (auto& client: clients) {
 		mixer_input in;
 		in.data = (void*)&(*client.queue.begin());
 		//in.len = client.queueState == FILLING ? 0 : client.queue.size() * 2;
@@ -305,9 +307,13 @@ void setErrorConnectionState(Client& client) {
 void transmitData(const e_code&) {
 	size_t size = mix();
 
-	for (auto client: clients) {
-		if (!client.ticket || client.queueState == ERROR || client.queueState == UNINITIALIZED)	
+	for (auto& client: clients) {
+		if (client.queueState == ERROR || client.queueState == UNINITIALIZED)	
 			continue;
+		/*if (!client.ticket) {
+			cerr << "WARNING! NO TICKET! " << endl;
+			continue;
+		}*/
 		client.ticket = false;
 		stringstream header;
 		header << "DATA " << lastData << " " << client.lastPacket << " " << 

@@ -2,6 +2,7 @@
 #include <boost/bind.hpp>
 #include <sstream>
 #include <vector>
+#include <queue>
 #include <algorithm>
 
 using namespace std;
@@ -44,6 +45,7 @@ void readNextDatagram();
 void nextKeepalive(const e_code&);
 bool handleError(const e_code& error, string caller);
 void handleAck(int ackId, unsigned long win);
+void writeNextPack(const e_code& error = e_code());
 
 extern int packId;
 extern int lastReceivedData;
