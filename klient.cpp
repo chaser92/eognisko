@@ -141,7 +141,7 @@ void transmitNextPack(const e_code& error) {
 	data << "UPLOAD " << packId << "\n";
 	if (window == 0)
 		cerr << "Warning: window empty!" << endl;
-	int dataSent = min(UDP_MAX_SIZE, min(dataToSend.size(), window));
+	int dataSent = min(UDP_MAX_SIZE, min((unsigned long)dataToSend.size(), window));
 	cerr << "WYSYLAM DANE " << packId << endl;
 	cerr << "Okno to " << window << ", a danych wyslemy " << dataSent << endl;
 	data.write(&(*dataToSend.begin()), dataSent);
