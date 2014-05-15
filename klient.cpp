@@ -24,6 +24,7 @@ boost::asio::posix::stream_descriptor input_(ioservice);
 boost::asio::posix::stream_descriptor output_(ioservice);
 string currentSentData;
 vector<char> dataToSend;
+queue<string> partsToWrite;
 boost::asio::deadline_timer keepaliveTimer(ioservice, boost::posix_time::milliseconds(10));
 boost::asio::deadline_timer nextpackTimer(ioservice, boost::posix_time::milliseconds(5));
 boost::asio::deadline_timer nextStdinTimer(ioservice, boost::posix_time::milliseconds(3));
@@ -77,6 +78,7 @@ void start() {
 			cerr << "Registered as client " << clientId << endl;
 			handshakeUdp(clientId);
 			readNextDatagram();
+			writeNextPack();
 		});
 }
 
@@ -126,7 +128,6 @@ void handshakeUdp(int clientId) {
 		[&] (const e_code& error, std::size_t bytes_transferred) {
 			if (handleError(error, "handshakeUdp"))
 				return;	
-		    transmitNextPack(e_code());
 		});
 }
 
@@ -159,29 +160,47 @@ void transmitNextPack(const e_code& error) {
 
 
 void handleAck(int ackId, unsigned long win) {
-	cerr << "ACKACKACKACKACKACKACKACAKCAKC"  << endl;
+	cerr << "ACK " << ackId << " " << packId <<endl;
 	window = win;
-	packId++;
-	transmitNextPack(e_code());
+	if (ackId >= packId) {
+		packId++;
+		transmitNextPack(e_code());
+	}
 }
 
 void handleData(int id, int ack, int win, stringstream& data, size_t bytes_transferred) {
-	cerr << "DATA " << id << endl;
+	cerr << "DATA " << id << ack << endl;
 	window = win;
 	lastReceivedData = id;
+	handleAck(ack, win);
 	//cerr << "Incoming data (" << bytes_transferred << "):";
-	fwrite(udpBuffer + (data.tellg() + 1LL), sizeof(char), 
-		bytes_transferred - (data.tellg() + 1LL), stdout);
-	//shared_ptr<string> dataToPrint(new string(udpBuffer + (data.tellg() + 1LL), 
-	//	bytes_transferred - (data.tellg() + 1LL)));
+	//fwrite(udpBuffer + (data.tellg() + 1LL), sizeof(char), 
+	//	bytes_transferred - (data.tellg() + 1LL), stdout);
+	
+	string dataToPrint(udpBuffer + (data.tellg() + 1LL), 
+		bytes_transferred - (data.tellg() + 1LL));
+	partsToWrite.push(dataToPrint);
 	//for (int i=0; i<dataToPrint->length(); i++)
-//		cerr << (int)((*dataToPrint)[i]) << " ";
-	/*boost::asio::async_write(output_, 
-		boost::asio::buffer(*dataToPrint, dataToPrint->length()),
-		[&] (const e_code&, size_t bytes_transferred) {
-
-		});*/
+	//	cerr << (int)((*dataToPrint)[i]) << " ";
+	//writeNextPack();
 	//cerr << endl;
+}
+
+void writeNextPack(const e_code&) {
+	if (partsToWrite.size() > 0)
+	{
+		boost::asio::async_write(output_, 
+			boost::asio::buffer(partsToWrite.front(), partsToWrite.front().length()),
+			[&] (const e_code&, size_t bytes_transferred) {
+				cerr << bytes_transferred << endl;
+				partsToWrite.pop();
+				writeNextPack();
+			});	
+	}
+	else {
+		nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(1));
+		nextpackTimer.async_wait(&writeNextPack);
+	}
 }
 
 void readNextDatagram() {
