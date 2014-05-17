@@ -179,7 +179,8 @@ void handleData(int id, int ack, int win, stringstream& data, size_t bytes_trans
 	
 	string dataToPrint(udpBuffer + (data.tellg() + 1LL), 
 		bytes_transferred - (data.tellg() + 1LL));
-	partsToWrite.push(dataToPrint);
+	if (partsToWrite.size() < 1)
+		partsToWrite.push(dataToPrint);
 	//for (int i=0; i<dataToPrint->length(); i++)
 	//	cerr << (int)((*dataToPrint)[i]) << " ";
 	//writeNextPack();

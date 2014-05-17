@@ -21,7 +21,7 @@ void mixer(struct mixer_input* inputs,
 			if (pos >= inputs[i].len / 2) 
 				continue;
 			val = min((((int16_t*)inputs[i].data)[pos]) + val, INT16_MAX);
-			val = ((int16_t*)inputs[i].data)[pos];
+		//	val = ((int16_t*)inputs[i].data)[pos];
 			inputs[i].consumed += 2;
 		}
 		((int16_t*)output_buf)[pos] = val;
