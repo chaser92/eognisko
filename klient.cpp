@@ -1,5 +1,5 @@
 #include "klient.h"
-
+const bool DEBUG = false;
 int lastData = 0;
 int lastClient = 0;
 int PORT = 14582;// numer portu, z ktorego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
@@ -10,7 +10,7 @@ int packId = 0;
 unsigned long window = 0;
 int lastReceivedData = 0;
 char udpBuffer[1000001];
-unsigned long UDP_MAX_SIZE = 512;
+unsigned long UDP_MAX_SIZE = 2048;
 boost::asio::io_service ioservice;
 boost::asio::ip::tcp::endpoint endpoint;
 boost::asio::ip::udp::endpoint endpoint_udp;
@@ -109,7 +109,6 @@ void readNextStdinLine(const e_code&) {
 				dataToSend.push_back(inbuf[i]);
 			}
 			readNextStdinLine();
-    		cerr << "Odczytano z wejscia  " << read_from_stdin_total << endl;
     	});
   	}
 }
@@ -140,11 +139,13 @@ void transmitNextPack(const e_code& error) {
 		return;
 	stringstream data;
 	data << "UPLOAD " << packId << "\n";
-	if (window == 0)
-		cerr << "Warning: window empty!" << endl;
+	//if (window == 0)
+	//	cerr << "Warning: window empty!" << endl;
 	int dataSent = min(UDP_MAX_SIZE, min((unsigned long)dataToSend.size(), window));
-	cerr << "WYSYLAM DANE " << packId << endl;
-	cerr << "Okno to " << window << ", a danych wyslemy " << dataSent << endl;
+	if (DEBUG)
+		cerr << "WYSYLAM DANE " << packId << endl;
+	if (DEBUG)
+		cerr << "Okno to " << window << ", a danych wyslemy " << dataSent << endl;
 	data.write(&(*dataToSend.begin()), dataSent);
 	totalTransferred += dataSent;
 	currentSentData = data.str();
@@ -160,7 +161,8 @@ void transmitNextPack(const e_code& error) {
 
 
 void handleAck(int ackId, unsigned long win) {
-	cerr << "ACK " << ackId << " " << packId <<endl;
+	if (DEBUG)
+		cerr << "ACK " << ackId << " " << packId <<endl;
 	window = win;
 	if (ackId >= packId) {
 		packId++;
@@ -169,7 +171,8 @@ void handleAck(int ackId, unsigned long win) {
 }
 
 void handleData(int id, int ack, int win, stringstream& data, size_t bytes_transferred) {
-	cerr << "DATA " << id << ack << endl;
+	if (DEBUG)
+		cerr << "DATA " << id << ack << endl;
 	window = win;
 	lastReceivedData = id;
 	handleAck(ack, win);
@@ -179,8 +182,7 @@ void handleData(int id, int ack, int win, stringstream& data, size_t bytes_trans
 	
 	string dataToPrint(udpBuffer + (data.tellg() + 1LL), 
 		bytes_transferred - (data.tellg() + 1LL));
-	if (partsToWrite.size() < 1)
-		partsToWrite.push(dataToPrint);
+	partsToWrite.push(dataToPrint);
 	//for (int i=0; i<dataToPrint->length(); i++)
 	//	cerr << (int)((*dataToPrint)[i]) << " ";
 	//writeNextPack();
@@ -193,19 +195,17 @@ void writeNextPack(const e_code&) {
 		boost::asio::async_write(output_, 
 			boost::asio::buffer(partsToWrite.front(), partsToWrite.front().length()),
 			[&] (const e_code&, size_t bytes_transferred) {
-				cerr << bytes_transferred << endl;
 				partsToWrite.pop();
 				writeNextPack();
 			});	
 	}
 	else {
-		nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(1));
+		nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(5));
 		nextpackTimer.async_wait(&writeNextPack);
 	}
 }
 
 void readNextDatagram() {
-	cerr << "readNextDatagram" << endl;
 	if (connectionOk)
 	sock_dgram.async_receive_from(
 		boost::asio::buffer(udpBuffer, 1000000),

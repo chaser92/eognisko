@@ -306,7 +306,8 @@ void setErrorConnectionState(Client& client) {
 
 void transmitData(const e_code&) {
 	size_t size = mix();
-
+	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(TX_INTERVAL));
+	transmitter.async_wait(&transmitData);
 	for (auto& client: clients) {
 		if (client.queueState == ERROR || client.queueState == UNINITIALIZED)	
 			continue;
@@ -328,8 +329,6 @@ void transmitData(const e_code&) {
 			});
 	}
 	lastData++;
-	transmitter.expires_at(transmitter.expires_at() + boost::posix_time::milliseconds(TX_INTERVAL));
-	transmitter.async_wait(&transmitData);
 }
 
 bool handleError(const e_code& error, const string& caller, Client* client) {
