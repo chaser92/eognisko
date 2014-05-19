@@ -4,6 +4,7 @@
 #include <vector>
 #include <queue>
 #include <algorithm>
+#include <ctime>
 
 using namespace std;
 typedef boost::system::error_code e_code;
@@ -18,18 +19,20 @@ extern int TX_INTERVAL;
 extern boost::asio::io_service ioservice;
 extern boost::asio::ip::tcp::endpoint endpoint;
 extern boost::asio::ip::udp::endpoint endpoint_udp;
-extern boost::asio::ip::udp::socket sock_dgram;
+extern boost::asio::ip::udp::socket socketDatagram;
 extern boost::asio::ip::tcp::socket sock_stream;
 extern boost::asio::streambuf tcpbuffer;
 extern boost::asio::streambuf inbuffer;
 extern char udpBuffer[];
 extern boost::asio::posix::stream_descriptor input_;
-extern vector<char> dataToSend;
+extern queue<char> dataToSend;
 extern string currentSentData;
 extern unsigned long window;
 extern boost::asio::deadline_timer keepaliveTimer;
 extern boost::asio::deadline_timer nextpackTimer;
+extern boost::asio::deadline_timer nextTransmitTimer;
 extern boost::asio::deadline_timer nextStdinTimer;
+extern boost::asio::deadline_timer watchdogTimer;
 extern bool connectionOk;
 extern string keepaliveText;
 extern unsigned long UDP_MAX_SIZE;
@@ -49,3 +52,4 @@ void writeNextPack(const e_code& error = e_code());
 
 extern int packId;
 extern int lastReceivedData;
+extern time_t serverLastActive;

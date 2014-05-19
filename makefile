@@ -1,5 +1,5 @@
 CXX=g++
-CXXFLAGS=-Wall -g --std=c++11 
+CXXFLAGS=-Wall -g -framework CoreFoundation --std=c++11 
 
 all: klient serwer
 

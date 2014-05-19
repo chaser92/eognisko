@@ -7,27 +7,44 @@
 #include <string>
 #include <sstream>
 #include <map>
+#include <ctime>
+
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
-#include <boost/asio/ip/tcp.hpp>
 #include <boost/program_options.hpp>
+#include <boost/lexical_cast.hpp>
+#include <boost/date_time/posix_time/posix_time.hpp>
 
 using namespace std;
 typedef boost::system::error_code e_code;
+typedef boost::asio::ip::udp::endpoint udp_endpoint;
 namespace po = boost::program_options;
 
 enum QueueState {
   FILLING,
   ACTIVE,
-  ERROR,
-  UNINITIALIZED
+  ERROR, // polaczenie jest klopotliwe
+  TCP_ONLY // powiazanie TCP jeszcze nie nastapilo
 };
 
 struct mixer_input {
   void* data;       // Wskaznik na dane w FIFO
   size_t len;       // Liczba dostepnych bajtow
-  size_t consumed;  // Wartosc ustawiana przez mikser, wskazująca, ile
+  size_t consumed;  // Wartosc ustawiana przez mikser, wskazujaca, ile
                     // bajtow nalezy usunac z FIFO.
+};
+
+struct Client {
+  Client();
+  int id; // identyfikator klienta nadany przez serwer
+  QueueState queueState;
+  vector<int16_t> queue; // kolejka FIFO wartosci dla miksera
+  boost::asio::ip::tcp::socket* socket; // socket TCP do wysylania raportow
+  udp_endpoint udpEndpoint; // endpoint UDP do wysylania danych
+  int lastPacket; // numer ostatniego pakietu potwierdzonego przez serwer
+  int minFifoSecond; // minimalna ilosc danych FIFO w ostatniej sekundzie
+  int maxFifoSecond; // j.w.
+  time_t lastTime; // kiedy ostatnio klient kontaktowal sie z serwerem
 };
 
 void mixer(
@@ -37,71 +54,27 @@ void mixer(
   size_t* output_size,
   unsigned long tx_interval_ms);
 
-struct Client {
-  Client();
-  QueueState queueState;
-  vector<int16_t> queue;
-  boost::asio::ip::tcp::socket* socket;
-  boost::asio::ip::udp::endpoint udpEndpoint;
-  bool udpRegistered;
-  int lastPacket;
-  int minFifoSecond;
-  int maxFifoSecond;
-  string buf_dgram;
-  bool ticket;
-};
-
-extern map<boost::asio::ip::udp::endpoint, int> clientMap;
-
-void start(int port);
-void acceptNext();
-void onAccept(const e_code&);
-void deinit();
-void sendOutputDatagram();
-void sendPeriodicState(const e_code&);
-void acknowledge();
-void onSigint(const e_code&, int);
-void udpReceiveNext();
-void onUdpReceived(const e_code&, std::size_t);
-void evalClientUdpCommand(stringstream&, boost::asio::ip::udp::endpoint);
-void evalUploadUdpCommand(stringstream&, int, size_t);
-void evalRetransmitUdpCommand(stringstream&, int, size_t);
-void evalAckUdpCommand(stringstream&, int, size_t);
-void evalKeepaliveUdpCommand(stringstream&, int, size_t);
-void evalRetransmitUdpCommand(stringstream&, int, size_t);
-void transmitData(const e_code&);
-void updateMinMaxFifo(int);
-void setErrorConnectionState(Client&);
+void start(int port); // inicjuje serwer na podanym porcie i rozpoczyna nasluch
+void deinit(); // konczy prace programu
+void acceptNext(); // akceptuje kolejnego klienta TCP 
+void onAccept(const e_code&); // zdarzenie przy kolejnym gotowym kliencie
+void sendPeriodicState(const e_code&); // wysyla okresowa informacje o stanie kolejek (TCP)
+void onSigint(const e_code&, int); // operacja przed zakonczeniem programu
+void udpReceiveNext(); // polecenie pobierajace kolejny datagram
+void onUdpReceived(const e_code&, std::size_t); // handler datagramu
+void evalClientUdpCommand(stringstream&, udp_endpoint); // procesor obslugi polecenia CLIENT
+void evalUploadUdpCommand(stringstream&, int, size_t); // procesor obslugi polecenia UPLOAD
+void evalRetransmitUdpCommand(stringstream&, int, size_t); // procesor obslugi polecenia UPLOAD
+void evalKeepaliveUdpCommand(stringstream&, int, size_t); // procesor obslugi polecenia KEEPALIVE
+void evalRetransmitUdpCommand(stringstream&, int, size_t); // procesor obslugi polecenia RETRANSMIT
+void transmitData(const e_code&); // transmituje dane do wszystkich klientów
+void updateMinMaxFifo(Client&); // aktualizuje kolejkę FIFO
+void setErrorConnectionState(Client&); // ustawia stan polaczenia w tryb klopotliwy
 void onUdpReceived(const e_code& error,
   size_t bytes_transferred,
   shared_ptr<vector<char>> udpBuffer,
-  boost::asio::ip::udp::endpoint remote_endpoint);
-bool handleError(const e_code&, const string&, Client* cli = nullptr);
-size_t mix();
-
-extern boost::asio::io_service ioservice;
-extern boost::asio::ip::tcp::acceptor acceptor;
-extern boost::asio::deadline_timer periodicSender;
-extern boost::asio::deadline_timer transmitter;
-extern boost::asio::signal_set signals;
-extern boost::asio::ip::tcp::endpoint endpoint;
-extern boost::asio::ip::udp::endpoint endpoint_udp;
-extern boost::asio::ip::udp::socket sock_dgram;
-extern boost::asio::ip::udp::endpoint udp_received_endpoint;
-extern std::vector<Client> clients;
-extern Client toAccept;
-extern string state;
-extern char udpBuffer[];
-extern int16_t output_buf[100000]; 
-extern int lastUpload;
-extern int lastData;
-extern int lastClient;
-extern int PORT;// numer portu, z którego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
-extern int FIFO_SIZE; // rozmiar w bajtach kolejki FIFO, którą serwer utrzymuje dla każdego z klientów; ustawiany parametrem -F serwera, domyślnie 10560
-extern int FIFO_LOW_WATERMARK;// opis w treści; ustawiany parametrem -L serwera, domyślnie 0
-extern int FIFO_HIGH_WATERMARK;// opis w treści; ustawiany parametrem -H serwera, domyślnie równy FIFO_SIZE
-extern int BUF_LEN; // rozmiar (w datagramach) bufora pakietów wychodzących, ustawiany parametrem -X serwera, domyślnie 10 
-extern int RETRANSMIT_LIMIT; // opis w treści; ustawiany parametrem -X klienta, domyślnie 10
-extern int TX_INTERVAL; // czas (w milisekundach) pomiędzy kolejnymi wywołaniami miksera, ustawiany parametrem -i serwera; domyślnie: 5ms
+  udp_endpoint remote_endpoint);
+bool handleError(const e_code&, const string&, Client* client = nullptr); // zajmuje się obsługą błędu
+size_t mix(); // generuje bufor do wysłania klientom
 
 #endif

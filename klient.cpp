@@ -15,7 +15,7 @@ boost::asio::io_service ioservice;
 boost::asio::ip::tcp::endpoint endpoint;
 boost::asio::ip::udp::endpoint endpoint_udp;
 boost::asio::ip::udp::endpoint endpoint_udp_server;
-boost::asio::ip::udp::socket sock_dgram(ioservice);
+boost::asio::ip::udp::socket socketDatagram(ioservice);
 boost::asio::ip::tcp::socket sock_stream(ioservice);
 boost::asio::streambuf tcpbuffer;
 boost::asio::streambuf stdinbuffer;
@@ -23,17 +23,23 @@ boost::asio::streambuf udpbuffer;
 boost::asio::posix::stream_descriptor input_(ioservice);
 boost::asio::posix::stream_descriptor output_(ioservice);
 string currentSentData;
-vector<char> dataToSend;
+queue<char> dataToSend;
 queue<string> partsToWrite;
 boost::asio::deadline_timer keepaliveTimer(ioservice, boost::posix_time::milliseconds(10));
 boost::asio::deadline_timer nextpackTimer(ioservice, boost::posix_time::milliseconds(5));
+boost::asio::deadline_timer nextTransmitTimer(ioservice, boost::posix_time::milliseconds(3));
 boost::asio::deadline_timer nextStdinTimer(ioservice, boost::posix_time::milliseconds(3));
 string keepaliveText = "KEEPALIVE\n";
 bool connectionOk = false;
+time_t serverLastActive = 0;
 
 int main(int argc, char** argv) { 
 	start();
 	ioservice.run();
+}
+
+void checkServerActivity() {
+
 }
 
 bool handleError(const e_code& error, string caller) {
@@ -49,11 +55,10 @@ void start() {
 	ios::sync_with_stdio(false);
 	endpoint.address(boost::asio::ip::address_v4::from_string("127.0.0.1"));
 	endpoint.port(PORT);
-	endpoint_udp = boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 15555);
 	endpoint_udp_server = boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 14582);
 	sock_stream.connect(endpoint);
-	sock_dgram.open(endpoint_udp.protocol());
-	sock_dgram.bind(endpoint_udp);
+	socketDatagram.open(endpoint_udp.protocol());
+	//masocketDatagram.bind(endpoint_udp);
 	cerr << "Client Started!" << endl;
 	boost::asio::async_read_until(sock_stream, tcpbuffer, '\n', 
 		[&] (const e_code& error, size_t bytes_received) {
@@ -106,7 +111,7 @@ void readNextStdinLine(const e_code&) {
 			if (error)
 				return;
 			for (size_t i=0; i<bytes_received; i++) {
-				dataToSend.push_back(inbuf[i]);
+				dataToSend.push(inbuf[i]);
 			}
 			readNextStdinLine();
     	});
@@ -121,7 +126,7 @@ void handshakeUdp(int clientId) {
 	stringstream data;
 	data << "CLIENT " << clientId << '\n';
 	currentSentData = data.str();
-	sock_dgram.async_send_to(
+	socketDatagram.async_send_to(
 		boost::asio::buffer(currentSentData, currentSentData.length()),
 		endpoint_udp_server,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
@@ -146,17 +151,19 @@ void transmitNextPack(const e_code& error) {
 		cerr << "WYSYLAM DANE " << packId << endl;
 	if (DEBUG)
 		cerr << "Okno to " << window << ", a danych wyslemy " << dataSent << endl;
-	data.write(&(*dataToSend.begin()), dataSent);
+	for (int i=0; i<dataSent; i++) {
+		data << dataToSend.front();
+		dataToSend.pop();
+	}
 	totalTransferred += dataSent;
 	currentSentData = data.str();
-	sock_dgram.async_send_to(
+	socketDatagram.async_send_to(
 		boost::asio::buffer(currentSentData, currentSentData.length()),
 		endpoint_udp_server,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
 			if (handleError(error, "transmitNextPack"))
 				return;
 		});
-	dataToSend.erase(dataToSend.begin(), dataToSend.begin() + dataSent);
 }
 
 
@@ -166,7 +173,8 @@ void handleAck(int ackId, unsigned long win) {
 	window = win;
 	if (ackId >= packId) {
 		packId++;
-		transmitNextPack(e_code());
+		nextTransmitTimer.expires_at(nextTransmitTimer.expires_at() + boost::posix_time::milliseconds(3));
+		nextTransmitTimer.async_wait(&transmitNextPack);
 	}
 }
 
@@ -207,12 +215,13 @@ void writeNextPack(const e_code&) {
 
 void readNextDatagram() {
 	if (connectionOk)
-	sock_dgram.async_receive_from(
+	socketDatagram.async_receive_from(
 		boost::asio::buffer(udpBuffer, 1000000),
 		endpoint_udp_server,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
 			if (handleError(error, "readNextDatagram"))
 				return;
+			serverLastActive = time(0);
 			stringstream data(udpBuffer);
 			string command;
 			data >> command;
@@ -241,7 +250,7 @@ void nextKeepalive(const e_code& error) {
 		return;	
 	}
 	if (connectionOk)
-	sock_dgram.async_send_to(
+	socketDatagram.async_send_to(
 	boost::asio::buffer(keepaliveText, keepaliveText.length()),
 		endpoint_udp_server,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
