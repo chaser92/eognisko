@@ -1,39 +1,109 @@
 #include "klient.h"
+
+// czy maja byc pokazywane informacje debugera
 const bool DEBUG = false;
-int lastData = 0;
-int lastClient = 0;
-int PORT = 14582;// numer portu, z ktorego korzysta serwer do komunikacji (zarówno TCP, jak i UDP), domyślnie 10000 + (numer_albumu % 10000); ustawiany parametrem -p serwera, opcjonalnie też klient (patrz opis)
-int BUF_LEN = 10; // rozmiar (w datagramach) bufora pakietów wychodzących, ustawiany parametrem -X serwera, domyślnie 10 
-int RETRANSMIT_LIMIT = 10; // opis w treści; ustawiany parametrem -X klienta, domyślnie 10
-int TX_INTERVAL = 5; 
-int packId = 0;
-unsigned long window = 0;
-int lastReceivedData = 0;
-char udpBuffer[1000001];
+
+// rozmiar maksymalny wychodzącego datagram UDP
 unsigned long UDP_MAX_SIZE = 2048;
+
+// host serwera
+string SERVER_NAME = "127.0.0.1";
+
+// numer portu dla serwera
+int PORT = 14582;
+
+// maksymalna liczba retransmisji
+int RETRANSMIT_LIMIT = 10;
+
+// numer nowej paczki do nadania
+int packId = 0;
+
+// ostatnio podany rozmiar okna
+unsigned long window = 0;
+
+// bufor na przychodzące datagramy UDP
+char udpBuffer[1000001];
+
+// usługa ASIO
 boost::asio::io_service ioservice;
+
+// endpointy TCP i nadawania UDP
 boost::asio::ip::tcp::endpoint endpoint;
 boost::asio::ip::udp::endpoint endpoint_udp;
+
+// endpoint odbierania UDP od serwera
 boost::asio::ip::udp::endpoint endpoint_udp_server;
+
+// socket do wymiany danych UDP
 boost::asio::ip::udp::socket socketDatagram(ioservice);
-boost::asio::ip::tcp::socket sock_stream(ioservice);
+
+// socket do odbioru raportów
+boost::asio::ip::tcp::socket socketStream(ioservice);
+
 boost::asio::streambuf tcpbuffer;
 boost::asio::streambuf stdinbuffer;
 boost::asio::streambuf udpbuffer;
+
+// do asynchronicznego IO z standardowych deskryptorów
 boost::asio::posix::stream_descriptor input_(ioservice);
 boost::asio::posix::stream_descriptor output_(ioservice);
+
+
 string currentSentData;
+
+// dane pobrane ze standardowego wejścia, które nie zostały jeszcze nadane
 queue<char> dataToSend;
+
+// dane gotowe do wypisania na standardowe wyjście
 queue<string> partsToWrite;
+
+// timer do wysyłania komunikatów KEEPALIVE
 boost::asio::deadline_timer keepaliveTimer(ioservice, boost::posix_time::milliseconds(10));
+
+// wypisuje kolejną partię na standardowe wyjście
 boost::asio::deadline_timer nextpackTimer(ioservice, boost::posix_time::milliseconds(5));
+
+// transmituje kolejny datagram UPLOAD
 boost::asio::deadline_timer nextTransmitTimer(ioservice, boost::posix_time::milliseconds(3));
+
+// timer do odczytu kolejnej porcji z STDIN
 boost::asio::deadline_timer nextStdinTimer(ioservice, boost::posix_time::milliseconds(3));
 string keepaliveText = "KEEPALIVE\n";
 bool connectionOk = false;
 time_t serverLastActive = 0;
 
 int main(int argc, char** argv) { 
+	po::options_description desc("Allowed options");
+	desc.add_options()
+		("help,h", "produce help message")
+		("server,s", po::value<string>(), "set server name")
+		("port,p", po::value<int>(), "set server port")
+		("retransmit,X", po::value<int>(), "set retransmit limit");
+
+	po::variables_map vm;
+	try {
+		po::store(po::parse_command_line(argc, argv, desc), vm);
+		po::notify(vm);
+	} catch (po::unknown_option err) {
+		cerr << err.what() << endl;
+		return 2;
+	} catch (po::invalid_command_line_syntax err) {
+		cerr << err.what() << endl;
+		return 2;		
+	}
+
+	if (vm.count("help")) {
+		cout << desc << "\n";
+		return 0;
+	}
+
+	if (vm.count("server"))
+		SERVER_NAME = vm["server"].as<string>();
+	if (vm.count("port"))
+		PORT = vm["port"].as<int>();
+	if (vm.count("retransmit"))
+		RETRANSMIT_LIMIT = vm["retransmit"].as<int>();
+
 	start();
 	ioservice.run();
 }
@@ -52,15 +122,32 @@ bool handleError(const e_code& error, string caller) {
 }
 
 void start() {
+	boost::asio::ip::tcp::resolver resolver(ioservice);
 	ios::sync_with_stdio(false);
-	endpoint.address(boost::asio::ip::address_v4::from_string("127.0.0.1"));
-	endpoint.port(PORT);
-	endpoint_udp_server = boost::asio::ip::udp::endpoint(boost::asio::ip::udp::v4(), 14582);
-	sock_stream.connect(endpoint);
-	socketDatagram.open(endpoint_udp.protocol());
-	//masocketDatagram.bind(endpoint_udp);
+
+	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = 
+		resolver.resolve(boost::asio::ip::tcp::resolver::query(SERVER_NAME, to_string(PORT)));
+    boost::asio::ip::tcp::resolver::iterator end;
+    boost::system::error_code error = boost::asio::error::host_not_found;
+
+    while (error && endpoint_iterator != end)
+    {
+    	boost::asio::ip::tcp::endpoint end = *endpoint_iterator;
+    	socketStream.close();
+		socketStream.connect(*endpoint_iterator, error);
+		if (!error)
+			endpoint = *endpoint_iterator;
+		endpoint_iterator++;
+    }
+    if (error)
+    	throw boost::system::system_error(error);
+
+	endpoint_udp_server.address(endpoint.address());
+	endpoint_udp_server.port(endpoint.port());
+
+	socketDatagram.open(endpoint_udp_server.protocol());
 	cerr << "Client Started!" << endl;
-	boost::asio::async_read_until(sock_stream, tcpbuffer, '\n', 
+	boost::asio::async_read_until(socketStream, tcpbuffer, '\n', 
 		[&] (const e_code& error, size_t bytes_received) {
 			if (handleError(error, "start:tcp_read_greeting"))
 				return;
@@ -71,7 +158,6 @@ void start() {
 			string cmd;
 			int clientId; 
 			data >> cmd >> clientId;
-			//4cerr << cmd << " " << clientId << endl;
 			if (cmd != "CLIENT") {
 				cerr << "Error! Unknown Server Type!" << endl;
 			}
@@ -89,7 +175,7 @@ void start() {
 
 void readNextReportLine() {
 	if (connectionOk)
-	boost::asio::async_read_until(sock_stream, tcpbuffer, '\n', 
+	boost::asio::async_read_until(socketStream, tcpbuffer, '\n', 
 		[&] (const e_code& error, size_t bytes_received) {
 			if (handleError(error, "readNextReportLine"))
 				return;
@@ -144,8 +230,6 @@ void transmitNextPack(const e_code& error) {
 		return;
 	stringstream data;
 	data << "UPLOAD " << packId << "\n";
-	//if (window == 0)
-	//	cerr << "Warning: window empty!" << endl;
 	int dataSent = min(UDP_MAX_SIZE, min((unsigned long)dataToSend.size(), window));
 	if (DEBUG)
 		cerr << "WYSYLAM DANE " << packId << endl;
@@ -182,7 +266,6 @@ void handleData(int id, int ack, int win, stringstream& data, size_t bytes_trans
 	if (DEBUG)
 		cerr << "DATA " << id << ack << endl;
 	window = win;
-	lastReceivedData = id;
 	handleAck(ack, win);
 	//cerr << "Incoming data (" << bytes_transferred << "):";
 	//fwrite(udpBuffer + (data.tellg() + 1LL), sizeof(char), 
@@ -208,7 +291,7 @@ void writeNextPack(const e_code&) {
 			});	
 	}
 	else {
-		nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(5));
+		nextpackTimer.expires_at(nextpackTimer.expires_at() + boost::posix_time::milliseconds(2));
 		nextpackTimer.async_wait(&writeNextPack);
 	}
 }

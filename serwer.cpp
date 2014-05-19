@@ -22,6 +22,8 @@ boost::asio::deadline_timer periodicSender(ioservice, boost::posix_time::millise
 // timer do okresowego wysyłania danych audio
 boost::asio::deadline_timer transmitter(ioservice, boost::posix_time::milliseconds(1));
 
+// sprawdza, czy klienci są w kontakcie z serwerem
+boost::asio::deadline_timer connectivityWatchdog(ioservice, boost::posix_time::milliseconds(50));
 string currentSentData;
 
 // zawiera informacje o podłączonych klientach
@@ -82,7 +84,6 @@ int main(int argc, char** argv) {
 		("low,L", po::value<int>(), "set low watermark")
 		("high,H", po::value<int>(), "set high watermark")
 		("buflen,X", po::value<int>(), "set buffer length")
-		("retransmit,X", po::value<int>(), "set retransmit limit")
 		("txinterval,i", po::value<int>(), "tx interval (msec)");
 
 	po::variables_map vm;
@@ -112,8 +113,6 @@ int main(int argc, char** argv) {
 		FIFO_HIGH_WATERMARK = vm["high"].as<int>();
 	if (vm.count("buflen"))
 		BUF_LEN = vm["buflen"].as<int>();
-	if (vm.count("retransmit"))
-		RETRANSMIT_LIMIT = vm["retransmit"].as<int>();
 	if (vm.count("txinterval"))
 		TX_INTERVAL = vm["txinterval"].as<int>();
 
@@ -136,12 +135,30 @@ void start(int port) {
 		sendPeriodicState(e_code());
 		transmitData(e_code());
 		udpReceiveNext();
+		watchdogElapsed();
 		ioservice.run();
 	} catch (exception const& exc) {
 		cerr << exc.what() << endl;
 		cerr << "Could not initialize server." << endl;
 		deinit();
 		return;
+	}
+}
+
+unsigned long timeMillis() {
+	return std::chrono::system_clock::now().time_since_epoch() / 
+    	std::chrono::milliseconds(1);
+}
+
+void watchdogElapsed(const e_code&) {
+	connectivityWatchdog.expires_at(connectivityWatchdog.expires_at() + boost::posix_time::milliseconds(50));
+	connectivityWatchdog.async_wait(&watchdogElapsed);	
+	unsigned long now = timeMillis();
+	for (auto& client : clients) {
+		if (client.queueState == TCP_ONLY || client.queueState == ERROR)
+			continue;
+		if (client.lastContactTime < now - 1000)
+			setErrorConnectionState(client);
 	}
 }
 
@@ -207,6 +224,7 @@ void evalClientUdpCommand(stringstream& stream, boost::asio::ip::udp::endpoint r
 		if (client.id == clientId)
 		{
 			client.udpEndpoint = remote_endpoint;
+			client.lastContactTime = timeMillis();
 			client.queueState = FIFO_LOW_WATERMARK == 0 ? ACTIVE : FILLING;
 			break;
 		}
@@ -273,7 +291,8 @@ void udpReceiveNext() {
 				if (handleError(error, "onUdpReceived"))
 					return;
 				Client* client = recognizeClient(udpReceivedEndpoint);
-
+				if (client)
+					client->lastContactTime = timeMillis();
 				stringstream stream(receivedUdpBuffer);
 				string command;
 				stream >> command;
@@ -332,7 +351,6 @@ size_t mix() {
 			continue;
 		mixer_input in;
 		in.data = (void*)&(*client.queue.begin());
-		cerr << (client.queueState == FILLING);
 		in.len = client.queueState == FILLING ? 0 : client.queue.size() * 2;
 		in.consumed = 0;
 		inputs.push_back(in);

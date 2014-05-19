@@ -7,7 +7,7 @@
 #include <string>
 #include <sstream>
 #include <map>
-#include <ctime>
+#include <chrono>
 
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
@@ -44,7 +44,7 @@ struct Client {
   int lastPacket; // numer ostatniego pakietu potwierdzonego przez serwer
   int minFifoSecond; // minimalna ilosc danych FIFO w ostatniej sekundzie
   int maxFifoSecond; // j.w.
-  time_t lastTime; // kiedy ostatnio klient kontaktowal sie z serwerem
+  unsigned long lastContactTime; // kiedy ostatnio klient kontaktowal sie z serwerem
 };
 
 void mixer(
@@ -70,6 +70,8 @@ void evalRetransmitUdpCommand(stringstream&, int, size_t); // procesor obslugi p
 void transmitData(const e_code&); // transmituje dane do wszystkich klientów
 void updateMinMaxFifo(Client&); // aktualizuje kolejkę FIFO
 void setErrorConnectionState(Client&); // ustawia stan polaczenia w tryb klopotliwy
+void watchdogElapsed(const e_code& error = e_code()); // sprawdza, czy klienci są w łączności
+unsigned long timeMillis();
 void onUdpReceived(const e_code& error,
   size_t bytes_transferred,
   shared_ptr<vector<char>> udpBuffer,
