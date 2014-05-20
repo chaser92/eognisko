@@ -244,8 +244,8 @@ void evalUploadUdpCommand(stringstream& stream, Client* client, size_t bytes) {
 	stream >> packetId;
 	client->lastPacket = packetId;
 	stream.get();
-	for (int i=stream.tellg(); i<bytes-1; i+=2) {
-		if (client->queue.size() == FIFO_SIZE) 
+	for (size_t i=stream.tellg(); i<bytes-1; i+=2) {
+		if (client->queue.size() == (size_t)FIFO_SIZE) 
 		{
 			cerr << "Client " << client->udpEndpoint << " has its queue filled!" << endl;
 		}
@@ -317,7 +317,7 @@ void sendPeriodicState(const e_code& error) {
 		return;
 	stringstream strstate;
 	strstate << '\n';
-	for (int i=0; i<clients.size(); i++) {
+	for (size_t i=0; i<clients.size(); i++) {
 		Client& client = clients[i];
 		if (client.queueState != ERROR)
 			try {
@@ -358,7 +358,7 @@ size_t mix() {
 	}
 	size_t output_size;
 	mixer(&inputs[0], inputs.size(), mixedOutputBuffer, &output_size, TX_INTERVAL);
-	for (int i=0; i<inputs.size(); i++) {
+	for (size_t i=0; i<inputs.size(); i++) {
 		Client& client = *inputToClient[i];
 		client.queue.erase(client.queue.begin(), client.queue.begin() + inputs[i].consumed / 2);
 		updateMinMaxFifo(client);

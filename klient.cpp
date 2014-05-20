@@ -164,12 +164,11 @@ void start() {
 
 	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = 
 		resolver.resolve(boost::asio::ip::tcp::resolver::query(SERVER_NAME, to_string(PORT)));
-    boost::asio::ip::tcp::resolver::iterator end;
+    boost::asio::ip::tcp::resolver::iterator endIt;
     boost::system::error_code error = boost::asio::error::host_not_found;
 
-    while (error && endpoint_iterator != end)
+    while (error && endpoint_iterator != endIt)
     {
-    	boost::asio::ip::tcp::endpoint end = *endpoint_iterator;
     	socketStream.close();
 		socketStream.connect(*endpoint_iterator, error);
 		if (!error)
