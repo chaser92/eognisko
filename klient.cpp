@@ -313,8 +313,8 @@ void handleData(int id, int ack, int win, stringstream& data, size_t bytes_trans
 	window = win;
 	handleAck(ack, win);
 	
-	string dataToPrint(udpBuffer + (int)(data.tellg() + 1LL), 
-		bytes_transferred - (int)(data.tellg() + 1LL));
+	string dataToPrint(udpBuffer + (int)data.tellg() + 1), 
+		bytes_transferred - (int)data.tellg() + 1);
 	partsToWrite.push(dataToPrint);
 }
 
