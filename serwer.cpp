@@ -1,5 +1,8 @@
 #include "./serwer.h"
 
+// wyswietl informacje diagnostyczne
+bool DEBUG = false;
+
 // usługa ASIO
 boost::asio::io_service ioservice; 
 
@@ -239,7 +242,8 @@ void evalUploadUdpCommand(stringstream& stream, Client* client, size_t bytes) {
 		cerr << "Client is not registered!";
 		return;
 	}
-	cerr << "UPLOAD " << bytes << endl;
+	if (DEBUG)
+		cerr << "UPLOAD " << bytes << endl;
 	int packetId;
 	stream >> packetId;
 	client->lastPacket = packetId;
@@ -259,16 +263,17 @@ void evalUploadUdpCommand(stringstream& stream, Client* client, size_t bytes) {
 		}
 	}
 	updateMinMaxFifo(*client);
-	//cerr << "FIFOSIZE" << clientId << " " << clients[clientId].queue.size() << " " << bytes << endl;
 	stringstream response;
 	response << "ACK " << packetId << " " << (FIFO_SIZE - client->queue.size() * 2) << '\n';
 	shared_ptr<string> responseStr(new string(response.str()));
-	cerr << "POTWIERDZAM " << packetId << endl;
+	if (DEBUG)
+		cerr << "ACKNOWLEDGING " << packetId << endl;
 	socketDatagram.async_send_to(
 		boost::asio::buffer(*responseStr, responseStr->length()),
 		client->udpEndpoint,
 		[&] (const e_code& error, std::size_t bytes_transferred) {
-			cerr << "POTWIERDZONE." << endl;
+			if (DEBUG)
+				cerr << "ACKNOWLEDGED." << endl;
 	    	handleError(error, "upload:sendAcknowledgement");		    
 		});
 }

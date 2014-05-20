@@ -159,7 +159,6 @@ bool handleError(const e_code& error, string caller) {
 }
 
 void start() {
-	cerr << "start" << endl;
 	boost::asio::ip::tcp::resolver resolver(ioservice);
 
 	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = 
@@ -169,7 +168,7 @@ void start() {
 
     while (error && endpoint_iterator != endIt)
     {
-    	socketStream.close();
+	   	socketStream.close();
 		socketStream.connect(*endpoint_iterator, error);
 		if (!error)
 			endpoint = *endpoint_iterator;
@@ -177,7 +176,6 @@ void start() {
     }
     if (error)
     	throw boost::system::system_error(error);
-    cerr << "idk" << endl;
 	endpoint_udp_server.address(endpoint.address());
 	endpoint_udp_server.port(endpoint.port());
 	socketDatagram.close();
