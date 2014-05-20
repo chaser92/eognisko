@@ -12,8 +12,6 @@ string SERVER_NAME = "127.0.0.1";
 // numer portu dla serwera
 int PORT = 14582;
 
-// maksymalna liczba retransmisji
-int RETRANSMIT_LIMIT = 10;
 
 // numer nowej paczki do nadania
 int packId = 0;
@@ -68,17 +66,23 @@ boost::asio::deadline_timer nextTransmitTimer(ioservice, boost::posix_time::mill
 
 // timer do odczytu kolejnej porcji z STDIN
 boost::asio::deadline_timer nextStdinTimer(ioservice, boost::posix_time::milliseconds(3));
+
+// timer do odczytu kolejnej porcji z STDIN
+boost::asio::deadline_timer reconnectTimer(ioservice, boost::posix_time::seconds(1));
+
+// sprawdza, czy klienci są w kontakcie z serwerem
+boost::asio::deadline_timer connectivityWatchdog(ioservice, boost::posix_time::milliseconds(50));
 string keepaliveText = "KEEPALIVE\n";
 bool connectionOk = false;
-time_t serverLastActive = 0;
+unsigned long serverLastActive = 0;
+unsigned long serverLastAck = 0;
 
 int main(int argc, char** argv) { 
 	po::options_description desc("Allowed options");
 	desc.add_options()
 		("help,h", "produce help message")
 		("server,s", po::value<string>(), "set server name")
-		("port,p", po::value<int>(), "set server port")
-		("retransmit,X", po::value<int>(), "set retransmit limit");
+		("port,p", po::value<int>(), "set server port");
 
 	po::variables_map vm;
 	try {
@@ -101,14 +105,46 @@ int main(int argc, char** argv) {
 		SERVER_NAME = vm["server"].as<string>();
 	if (vm.count("port"))
 		PORT = vm["port"].as<int>();
-	if (vm.count("retransmit"))
-		RETRANSMIT_LIMIT = vm["retransmit"].as<int>();
-
-	start();
-	ioservice.run();
+	input_.assign( STDIN_FILENO );
+	output_.assign( STDOUT_FILENO );
+	ios::sync_with_stdio(false);
+ 	serverLastActive = timeMillis();
+	serverLastAck = timeMillis();
+    watchdogElapsed();
+	reconnect();
+	ioservice.run();	
 }
 
-void checkServerActivity() {
+void reconnect(const e_code&) {
+	cerr << "Reconnecting..." << endl;
+	try {
+		start();
+	}
+	catch (exception const& exc)
+	{
+		cerr << exc.what() << endl;
+		cerr << "Retrying...";
+ 		reconnectTimer.expires_at(reconnectTimer.expires_at() + boost::posix_time::seconds(1));
+ 		reconnectTimer.async_wait(&reconnect);  		
+	}
+}
+
+unsigned long timeMillis() {
+    return std::chrono::system_clock::now().time_since_epoch() / 
+        std::chrono::milliseconds(1);
+}
+
+void watchdogElapsed(const e_code&) {
+    connectivityWatchdog.expires_at(connectivityWatchdog.expires_at() + boost::posix_time::milliseconds(50));
+    connectivityWatchdog.async_wait(&watchdogElapsed);    
+    if (!connectionOk)
+        return;
+    unsigned long now = timeMillis();
+    if (serverLastAck < now - 500) 
+       retransmit();
+  }
+
+void retransmit() {
 
 }
 
@@ -117,13 +153,14 @@ bool handleError(const e_code& error, string caller) {
 		return false;
 	cerr << "Error: " << error << " in " << caller << endl;
 	cerr << error.message() << endl;
-	connectionOk = false;
+	abortApp();
+	reconnect();
 	return true;
 }
 
 void start() {
+	cerr << "start" << endl;
 	boost::asio::ip::tcp::resolver resolver(ioservice);
-	ios::sync_with_stdio(false);
 
 	boost::asio::ip::tcp::resolver::iterator endpoint_iterator = 
 		resolver.resolve(boost::asio::ip::tcp::resolver::query(SERVER_NAME, to_string(PORT)));
@@ -141,12 +178,14 @@ void start() {
     }
     if (error)
     	throw boost::system::system_error(error);
-
+    cerr << "idk" << endl;
 	endpoint_udp_server.address(endpoint.address());
 	endpoint_udp_server.port(endpoint.port());
-
+	socketDatagram.close();
 	socketDatagram.open(endpoint_udp_server.protocol());
 	cerr << "Client Started!" << endl;
+	serverLastActive = timeMillis();
+	serverLastAck = timeMillis();
 	boost::asio::async_read_until(socketStream, tcpbuffer, '\n', 
 		[&] (const e_code& error, size_t bytes_received) {
 			if (handleError(error, "start:tcp_read_greeting"))
@@ -161,13 +200,14 @@ void start() {
 			if (cmd != "CLIENT") {
 				cerr << "Error! Unknown Server Type!" << endl;
 			}
+			serverLastActive = timeMillis();
+			serverLastAck = timeMillis();
 			connectionOk = true;
-			input_.assign( STDIN_FILENO );
-			output_.assign( STDOUT_FILENO );
 			readNextReportLine();
-			readNextStdinLine();
+			readNextStdinPart();
 			cerr << "Registered as client " << clientId << endl;
 			handshakeUdp(clientId);
+			nextKeepalive();
 			readNextDatagram();
 			writeNextPack();
 		});
@@ -189,7 +229,7 @@ void readNextReportLine() {
 
 int read_from_stdin_total = 0;
 char inbuf[2048];
-void readNextStdinLine(const e_code&) {
+void readNextStdinPart(const e_code&) {
 	if (connectionOk) {
   	boost::asio::async_read(input_, boost::asio::buffer(inbuf, 2048),
     	[&] (const e_code& error, size_t bytes_received) {
@@ -199,12 +239,13 @@ void readNextStdinLine(const e_code&) {
 			for (size_t i=0; i<bytes_received; i++) {
 				dataToSend.push(inbuf[i]);
 			}
-			readNextStdinLine();
+			readNextStdinPart();
     	});
   	}
 }
 
-void abort() {
+void abortApp() {
+	cerr << "Aborting..." << endl;
 	connectionOk = false;
 }
 
@@ -257,8 +298,12 @@ void handleAck(int ackId, unsigned long win) {
 	window = win;
 	if (ackId >= packId) {
 		packId++;
-		nextTransmitTimer.expires_at(nextTransmitTimer.expires_at() + boost::posix_time::milliseconds(3));
-		nextTransmitTimer.async_wait(&transmitNextPack);
+		if (win > 0)
+			transmitNextPack(e_code());
+		else { 
+			nextTransmitTimer.expires_at(nextTransmitTimer.expires_at() + boost::posix_time::milliseconds(3));
+			nextTransmitTimer.async_wait(&transmitNextPack);
+		}
 	}
 }
 
@@ -267,17 +312,10 @@ void handleData(int id, int ack, int win, stringstream& data, size_t bytes_trans
 		cerr << "DATA " << id << ack << endl;
 	window = win;
 	handleAck(ack, win);
-	//cerr << "Incoming data (" << bytes_transferred << "):";
-	//fwrite(udpBuffer + (data.tellg() + 1LL), sizeof(char), 
-	//	bytes_transferred - (data.tellg() + 1LL), stdout);
 	
-	string dataToPrint(udpBuffer + (data.tellg() + 1LL), 
-		bytes_transferred - (data.tellg() + 1LL));
+	string dataToPrint(udpBuffer + (int)(data.tellg() + 1LL), 
+		bytes_transferred - (int)(data.tellg() + 1LL));
 	partsToWrite.push(dataToPrint);
-	//for (int i=0; i<dataToPrint->length(); i++)
-	//	cerr << (int)((*dataToPrint)[i]) << " ";
-	//writeNextPack();
-	//cerr << endl;
 }
 
 void writeNextPack(const e_code&) {

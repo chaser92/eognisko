@@ -12,12 +12,12 @@ void mixer(struct mixer_input* inputs,
   unsigned long tx_interval_ms) 
   {
 	unsigned long len = tx_interval_ms * (TX_LEN / 2);
-	int pos = 0;
+	unsigned long pos = 0;
 	//if (n > 0)
 	//cerr << "len " << inputs[0].len << endl;
 	while (pos < len) {
 		int16_t val = 0;
-		for (int i=0; i<n; i++) {
+		for (unsigned long i=0; i<n; i++) {
 			if (pos >= inputs[i].len / 2) {
 				continue;
 			}
